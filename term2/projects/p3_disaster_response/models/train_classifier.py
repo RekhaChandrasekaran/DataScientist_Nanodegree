@@ -1,24 +1,96 @@
 import sys
+import pandas as pd
+import numpy as np
+import pickle
+
+import warnings
+warnings.filterwarnings('ignore')
+
+from sqlalchemy import create_engine
+
+# NLTK
+import re
+import nltk
+
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem.wordnet import WordNetLemmatizer
+
+import sklearn
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.metrics import precision_score, recall_score, f1_score
 
 
 def load_data(database_filepath):
-    pass
+    engine = create_engine('sqlite:///{}'.format(database_filepath))
+    df = pd.read_sql_table(database_filepath, engine)
+    
+    X = df['message']
+    y = df.drop(['id', 'message', 'original', 'genre'], axis=1)
+    
+    category_names = y.columns
+    return X, y, category_names
 
 
 def tokenize(text):
-    pass
+    url_pattern = 'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\), ]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    
+    detected_urls = re.findall(url_pattern, text)
+    
+    for url in detected_urls:
+        text = text.replace(url, "urlplaceholder")
+        
+    tokens = word_tokenize(text)
+    lemmatizer = WordNetLemmatizer()
+        
+    normalized_tokens = [lemmatizer.lemmatize(token).lower().strip() 
+                       for token in tokens]
+        
+    # remove stopwords
+    STOPWORDS_EN = list(set(stopwords.words('english')))
+        
+    clean_tokens = [token for token in normalized_tokens if token not in STOPWORDS_EN]
+    
+    return clean_tokens
 
 
 def build_model():
-    pass
+    pipeline = Pipeline([
+        ('vec', CountVectorizer(tokenizer=tokenize)),
+        ('tfidf', TfidfTransformer()),
+        ('clf', MultiOutputClassifier(RandomForestClassifier(n_estimators=100, n_jobs=6)))
+    ])
+    return pipeline
 
 
 def evaluate_model(model, X_test, Y_test, category_names):
-    pass
+    y_pred = model.predict(X_test)
+    
+    reports = []
+    
+    for i in range(len(category_names)):
+        reports.append([
+            f1_score(Y_test.iloc[:, i].values, y_pred[:, i], average='micro'),
+            precision_score(Y_test.iloc[:, i].values, y_pred[:, i], average='micro'),
+            recall_score(Y_test.iloc[:, i].values, y_pred[:, i], average='micro')
+        ])
+    reports_df = pd.DataFrame(reports, columns=['f1_score', 'precision', 'recall'], index=category_names)
+    reports_df.to_csv('report_randomforest.csv', index=False)
+    print(reports_df)
 
 
 def save_model(model, model_filepath):
-    pass
+    pickle.dump(model, open(model_filepath, 'wb'))
+    
 
 
 def main():
